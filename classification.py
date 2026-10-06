@@ -7,6 +7,10 @@ import torch.nn as nn
 from collections import Counter
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+import copy
+import matplotlib.pyplot as plt
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
 PATH = "dataset.txt"
 
@@ -25,7 +29,7 @@ with open(PATH, encoding="utf-8", newline="") as f:
 
 df = pd.DataFrame(rows)
 
-# sanity checks
+# debugging
 #print(df.shape)                      # (2757, 3)
 #print(df["llm_name"].value_counts()) # 919 each
 #print(df.isna().sum())               # makes sure no missing values
@@ -37,7 +41,7 @@ df["label"] = le.fit_transform(df["llm_name"])
 
 prompts = df["llm_input"].unique()
 
-train_p, temp_p = train_test_split(prompts, test_size=0.2, random_state=42)
+train_p, temp_p = train_test_split(prompts, test_size=0.3, random_state=42)
 val_p, test_p   = train_test_split(temp_p,  test_size=0.5, random_state=42)
 
 train_df = df[df["llm_input"].isin(train_p)]
@@ -79,7 +83,7 @@ for token, count in counts.items():
 #print("Vocab size:", len(vocab))
 
 max_len = int(np.percentile([len(t) for t in train_tokens], 95))
-print("max_len:", max_len)
+#print("max_len:", max_len)
 
 def to_ids(token_lists):
     all_ids = []
@@ -103,5 +107,77 @@ y_train = torch.tensor(train_df["label"].values)
 y_val = torch.tensor(val_df["label"].values)
 y_test = torch.tensor(test_df["label"].values)
 
-# Embedding layer
-embedding = nn.Embedding(num_embeddings=len(vocab), embedding_dim=128, padding_idx=0)
+class CNNClassifier(nn.Module):
+    def __init__(self, vocab_size, embed_dim = 100, num_filters=100, kernel_sizes=(2,3,4,5), num_classes=3, dropout=0.5):
+        super().__init__()
+
+        # embed token IDs to word vectors
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.embed_dropout = nn.Dropout(0.2)
+
+        # one conv block per kernel size
+        self.convs = nn.ModuleList()
+        for k in kernel_sizes:
+            block = nn.Sequential(
+                nn.Conv1d(embed_dim, num_filters, kernel_size=k),
+                nn.BatchNorm1d(num_filters),
+                nn.ReLU()
+            )
+            self.convs.append(block)
+
+        # final linear layer, one score per llm
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(num_filters * len(kernel_sizes), num_classes)
+
+    def forward(self, x, lengths=None):          
+        e = self.embedding(x)                    
+        e = self.embed_dropout(e)
+        e = e.transpose(1, 2)                   
+
+        pooled = []
+
+        # max-pool: keep the strongest match per filter
+        for conv in self.convs:
+            features = conv(e)                  
+            strongest = features.max(dim=2).values   
+            pooled.append(strongest)
+
+        out = torch.cat(pooled, dim=1)          
+        out = self.dropout(out)
+        return self.fc(out)                      
+
+
+torch.manual_seed(42)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using:", device)
+
+BATCH_SIZE = 32
+
+# each batch gives (token IDs, lengths, labels) together
+train_loader = DataLoader(TensorDataset(X_train, len_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
+val_loader   = DataLoader(TensorDataset(X_val, len_val, y_val), batch_size=BATCH_SIZE)
+test_loader  = DataLoader(TensorDataset(X_test, len_test, y_test), batch_size=BATCH_SIZE)
+
+loss_fn = nn.CrossEntropyLoss()
+
+# pass one time over training data and update weights
+def train_one_epoch(model, loader, optimizer):
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+
+    for X_batch, len_batch, y_batch in loader:
+        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+
+        optimizer.zero_grad() # clear old gradients
+        outputs = model(X_batch, len_batch)
+        loss = loss_fn(outputs, y_batch) # find loss
+        loss.backward() # compute new gradients
+        optimizer.step() # update weights
+
+        total_loss += loss.item() * len(y_batch)
+        correct += (outputs.argmax(dim=1) == y_batch).sum().item()
+        total += len(y_batch)
+
+    return total_loss / total, correct / total

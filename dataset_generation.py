@@ -1,39 +1,53 @@
 from datasets import load_dataset
 import json
 
-dataset_name = 'andrewsiah/personalization_promptresponse'
-n = 4000
+dataset_name = 'lmsys/chatbot_arena_conversations'
+n = 10000
+threshold = 950
 output_file = 'dataset.txt'
 
 
-def format_record(name: str, prompt: str, output: str) -> str:
-    return f"({json.dumps(name)}, {json.dumps(prompt)}, {json.dumps(output)})\n"
+def format_record(model: str, input: str, output: str) -> str:
+    return f"({json.dumps(model)}, {json.dumps(input)}, {json.dumps(output)})\n"
 
 def main():
     data = load_dataset(dataset_name)
     dataset = data['train']
- 
+
+    claudeCount = 0
+    gptCount = 0
+    koalaCount = 0
     # Only take the first N examples
-    subset = dataset.select(range(min(n, len(dataset))))
+    #subset = dataset.select(range(min(n, len(dataset))))
+    
  
     with open(output_file, "w", encoding="utf-8") as out:
-        for example in subset:
-            prompt = example["prompt"]
-            model_1 = example["response_3_model"]
-            response_1 = example["response_3"]
+        for example in dataset:
+            if not example["language"] == "English":
+                continue
+            
+            model = example["model_a"]
+            response = example["conversation_a"]
+            prompt = response[0]["content"]
+            output = response[1]["content"]
 
-            model_2 = example["response_5_model"]
-            response_2 = example["response_5"]
+            if model == "koala-13b" and koalaCount < threshold:
+                out.write(format_record(model, prompt, output))
+                koalaCount+=1
 
-            model_3 = example["response_8_model"]
-            response_3 = example["response_8"]
+            if model == "claude-v1" and claudeCount < threshold:
+                out.write(format_record(model, prompt, output))
+                claudeCount+=1
 
-            if (model_1 == "anthropic/claude-3-opus" and model_2 == "openai/gpt-4o" and model_3 == "google/gemini-pro-1.5"):
-                out.write(format_record(model_1, prompt, response_1))
-                out.write(format_record(model_2, prompt, response_2))
-                out.write(format_record(model_3, prompt, response_3))
+            if model == "gpt-4" and gptCount < threshold:
+                out.write(format_record(model, prompt, output))
+                gptCount+=1
+                
  
-    print(f"Wrote {len(subset)} records to {output_file}")
+    print(f"Wrote {koalaCount} koala records to {output_file}\n")
+    print(f"Wrote {gptCount} koala records to {output_file}\n")
+    print(f"Wrote {claudeCount} koala records to {output_file}\n")
+
  
  
 if __name__ == "__main__":

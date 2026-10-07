@@ -34,6 +34,7 @@ df = pd.DataFrame(rows)
 #print(df["llm_name"].value_counts()) # 919 each
 #print(df.isna().sum())               # makes sure no missing values
 df = df.dropna(subset=["llm_name", "llm_output"]).reset_index(drop=True)
+df = df.drop_duplicates(subset=["llm_input", "llm_output"]).reset_index(drop=True)
 
 # Encode labels and split
 le = LabelEncoder()
@@ -181,3 +182,80 @@ def train_one_epoch(model, loader, optimizer):
         total += len(y_batch)
 
     return total_loss / total, correct / total
+
+
+# evaluate on either the validation or test data without updating weights
+def evaluate(model, loader):
+    model.eval()                                   # turns dropout off
+    total_loss, correct, total = 0, 0, 0
+    all_preds, all_labels = [], []
+
+    with torch.no_grad():                          # don't need gradients 
+        for X_batch, len_batch, y_batch in loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            outputs = model(X_batch, len_batch)
+            loss = loss_fn(outputs, y_batch)
+
+            preds = outputs.argmax(dim=1)
+            total_loss += loss.item() * len(y_batch)
+            correct += (preds == y_batch).sum().item()
+            total += len(y_batch)
+            all_preds.extend(preds.cpu().tolist())
+            all_labels.extend(y_batch.cpu().tolist())
+
+    return total_loss / total, correct / total, all_preds, all_labels
+
+# the actual training run, keeps the best model found
+def train_model(model, epochs=15, lr=1e-3):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+    best_val_loss = float("inf")
+    best_weights = None
+
+    for epoch in range(1, epochs + 1):
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer)
+        val_loss, val_acc, _, _ = evaluate(model, val_loader)
+
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+
+        print(f"Epoch {epoch:2d} | train loss {train_loss:.4f} acc {train_acc:.3f} "
+              f"| val loss {val_loss:.4f} acc {val_acc:.3f}")
+
+        # save the weights from the epoch with the lowest validation loss
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_weights = copy.deepcopy(model.state_dict())
+
+    model.load_state_dict(best_weights)            # go back to the best epoch
+    return history
+
+# loss and accuracy graphs
+def plot_history(history, title, filename):
+    epochs = range(1, len(history["train_loss"]) + 1)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+
+    ax1.plot(epochs, history["train_loss"], label="train")
+    ax1.plot(epochs, history["val_loss"], label="val")
+    ax1.set_title(f"{title} - loss"); ax1.set_xlabel("epoch"); ax1.legend()
+
+    ax2.plot(epochs, history["train_acc"], label="train")
+    ax2.plot(epochs, history["val_acc"], label="val")
+    ax2.set_title(f"{title} - accuracy"); ax2.set_xlabel("epoch"); ax2.legend()
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.show()
+
+cnn = CNNClassifier(vocab_size=len(vocab)).to(device)
+cnn_history = train_model(cnn, epochs=15, lr=1e-3)
+plot_history(cnn_history, "CNN", "cnn_curves.png")
+
+test_loss, test_acc, preds, labels = evaluate(cnn, test_loader)
+print(f"\nCNN test accuracy: {test_acc:.3f}")
+print(f"CNN test macro-F1: {f1_score(labels, preds, average='macro'):.3f}")
+print(classification_report(labels, preds, target_names=le.classes_))
+print("Confusion matrix (rows = true, columns = predicted):")
+print(confusion_matrix(labels, preds))

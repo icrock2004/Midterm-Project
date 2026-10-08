@@ -4,13 +4,16 @@ import spacy
 import ast
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pack_padded_sequence
+from torch.utils.data import TensorDataset, DataLoader
 from collections import Counter
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 import copy
 import matplotlib.pyplot as plt
-from torch.utils.data import TensorDataset, DataLoader
-from sklearn.metrics import classification_report, confusion_matrix, f1_score
+
+
 
 PATH = "dataset.txt"
 
@@ -108,6 +111,7 @@ y_train = torch.tensor(train_df["label"].values)
 y_val = torch.tensor(val_df["label"].values)
 y_test = torch.tensor(test_df["label"].values)
 
+# class for CNN classifier
 class CNNClassifier(nn.Module):
     def __init__(self, vocab_size, embed_dim = 100, num_filters=100, kernel_sizes=(2,3,4,5), num_classes=3, dropout=0.5):
         super().__init__()
@@ -147,6 +151,42 @@ class CNNClassifier(nn.Module):
         out = self.dropout(out)
         return self.fc(out)                      
 
+# class for the LSTM classifier
+class LSTMClassifier(nn.Module):
+    def __init__(self, vocab_size, embed_dim=100, hidden_dim=128, num_layers=1, num_classes=3, dropout=0.5, embed_dropout=0.2):
+        super().__init__()
+
+        # embed token IDs to word vectors
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.embed_dropout = nn.Dropout(embed_dropout)
+
+        # bidirectional LSTM reads the response forward and backward to make sure it gets common openers and closers
+        self.lstm = nn.LSTM(
+            embed_dim, hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=dropout if num_layers > 1 else 0,   # only applies between stacked layers
+        )
+
+        # final linear layer, one score per llm
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_dim * 2, num_classes)   # times two for forward and backward
+
+    def forward(self, x, lengths):
+        e = self.embedding(x)                        
+        e = self.embed_dropout(e)
+
+        # pack so the LSTM skips the padding and only reads each real response
+        packed = pack_padded_sequence(e, lengths.cpu(), batch_first=True,
+                                      enforce_sorted=False)
+        _, (hidden_state, _) = self.lstm(packed)
+
+        # final hidden state of the last layer, forward and backward
+        h = torch.cat([hidden_state[-2], hidden_state[-1]], dim=1)     # (batch, hidden_dim * 2)
+        h = self.dropout(h)
+        return self.fc(h) 
+    
 
 torch.manual_seed(42)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -249,8 +289,12 @@ def plot_history(history, title, filename):
     plt.savefig(filename)
     plt.show()
 
+
+# RQ1: Identify which LLM generated the response
+
+# CNN testing data
 cnn = CNNClassifier(vocab_size=len(vocab)).to(device)
-cnn_history = train_model(cnn, epochs=15, lr=1e-3)
+cnn_history = train_model(cnn, epochs=20, lr=1e-3)
 plot_history(cnn_history, "CNN", "cnn_curves.png")
 
 test_loss, test_acc, preds, labels = evaluate(cnn, test_loader)
@@ -258,4 +302,16 @@ print(f"\nCNN test accuracy: {test_acc:.3f}")
 print(f"CNN test macro-F1: {f1_score(labels, preds, average='macro'):.3f}")
 print(classification_report(labels, preds, target_names=le.classes_))
 print("Confusion matrix (rows = true, columns = predicted):")
+print(confusion_matrix(labels, preds))
+
+# LSTM testing data
+torch.manual_seed(42)
+lstm = LSTMClassifier(vocab_size=len(vocab)).to(device)
+lstm_history = train_model(lstm, epochs=4, lr=1e-3)
+plot_history(lstm_history, "LSTM", "lstm_curves.png")
+
+test_loss, test_acc, preds, labels = evaluate(lstm, test_loader)
+print(f"\nLSTM test accuracy: {test_acc:.3f}")
+print(f"LSTM test macro-F1: {f1_score(labels, preds, average='macro'):.3f}")
+print(classification_report(labels, preds, target_names=le.classes_))
 print(confusion_matrix(labels, preds))

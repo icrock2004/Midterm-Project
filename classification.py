@@ -78,10 +78,10 @@ counts = Counter()
 for tokens in train_tokens:
     counts.update(tokens)
 
-# 0 = padding and 1 = unknown word, then adds every token that's seen at least twice
+# 0 = padding and 1 = unknown word, then adds every token that's seen at least five times
 vocab = {"<pad>": 0, "<unk>": 1}
 for token, count in counts.items():
-    if count >= 2:
+    if count >= 5:
         vocab[token] = len(vocab)
 
 #print("Vocab size:", len(vocab))
@@ -326,7 +326,7 @@ def run_one(model, lr, epochs, settings, results, best,
 def tune_cnn(epochs=20):
     results, best = [], {"val_loss": float("inf")}
 
-    for dropout in [0.3, 0.5]:
+    for dropout in [0.3, 0.5, 0.6]:
         for kernels in [(2, 3, 4), (2, 3, 4, 5)]:
             for sched in [False, True]:
                 print(f"\n--- CNN: dropout={dropout}, kernels={kernels}, scheduler={sched} ---")
@@ -340,12 +340,12 @@ def tune_cnn(epochs=20):
     return save_results(results, best, "cnn")
 
 
-def tune_lstm(epochs=10):
+def tune_lstm(epochs=15):
     results, best = [], {"val_loss": float("inf")}
 
     for dropout in [0.5, 0.6]:
         for hidden in [64, 128]:
-            for wd in [0.0, 1e-4]:
+            for wd in [0.0, 1e-3, 1e-4]:
                 print(f"\n--- LSTM: dropout={dropout}, hidden_dim={hidden}, weight_decay={wd} ---")
                 torch.manual_seed(42)
                 model = LSTMClassifier(vocab_size=len(vocab), dropout=dropout,

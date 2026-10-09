@@ -264,7 +264,7 @@ def train_model(model, epochs=15, lr=1e-3, weight_decay=0.0, use_scheduler=False
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
-        current_lr = optimizer
+        current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch:2d} | train loss {train_loss:.4f} acc {train_acc:.3f} "
               f"| val loss {val_loss:.4f} acc {val_acc:.3f} | lr {current_lr:.1e}")
 

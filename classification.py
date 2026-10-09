@@ -33,8 +33,8 @@ with open(PATH, encoding="utf-8", newline="") as f:
 df = pd.DataFrame(rows)
 
 # debugging
-#print(df.shape)                      # (2757, 3)
-#print(df["llm_name"].value_counts()) # 919 each
+#print(df.shape)                      
+#print(df["llm_name"].value_counts()) 
 #print(df.isna().sum())               # makes sure no missing values
 df = df.dropna(subset=["llm_name", "llm_output"]).reset_index(drop=True)
 df = df.drop_duplicates(subset=["llm_input", "llm_output"]).reset_index(drop=True)

@@ -246,8 +246,11 @@ def evaluate(model, loader):
     return total_loss / total, correct / total, all_preds, all_labels
 
 # the actual training run, keeps the best model found
-def train_model(model, epochs=15, lr=1e-3):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+def train_model(model, epochs=15, lr=1e-3, weight_decay=0.0, use_scheduler=False):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = None
+    if use_scheduler:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
     best_val_loss = float("inf")
     best_weights = None
@@ -261,8 +264,12 @@ def train_model(model, epochs=15, lr=1e-3):
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
+        current_lr = optimizer
         print(f"Epoch {epoch:2d} | train loss {train_loss:.4f} acc {train_acc:.3f} "
-              f"| val loss {val_loss:.4f} acc {val_acc:.3f}")
+              f"| val loss {val_loss:.4f} acc {val_acc:.3f} | lr {current_lr:.1e}")
+
+        if scheduler:
+            scheduler.step(val_loss)
 
         # save the weights from the epoch with the lowest validation loss
         if val_loss < best_val_loss:
@@ -289,27 +296,82 @@ def plot_history(history, title, filename):
     plt.savefig(filename)
     plt.show()
 
+# saves the finetuning results to a csv to see which parameters were most successful
+def save_results(results, best, name):
+    table = pd.DataFrame(results).sort_values("val_loss")
+    print(table.to_string(index=False))
+    table.to_csv(f"{name}_tuning.csv", index=False)
+    pd.DataFrame(best["history"]).to_csv(f"{name}_history.csv", index_label="epoch")
+    return best["model"], best["history"]
+
+def run_one(model, lr, epochs, settings, results, best,
+            weight_decay=0.0, use_scheduler=False):
+    history = train_model(model, epochs=epochs, lr=lr,
+                          weight_decay=weight_decay, use_scheduler=use_scheduler)
+
+    best_epoch = int(np.argmin(history["val_loss"]))
+    val_loss = history["val_loss"][best_epoch]
+
+    results.append({
+        **settings, "lr": lr,
+        "weight_decay": weight_decay, "scheduler": use_scheduler,
+        "best_epoch": best_epoch + 1,
+        "val_loss": round(val_loss, 4),
+        "val_acc": round(history["val_acc"][best_epoch], 3),
+    })
+    # model already holds its best-epoch weights, so we can keep it directly
+    if val_loss < best["val_loss"]:
+        best.update(val_loss=val_loss, model=model, history=history)
+
+def tune_cnn(epochs=20):
+    results, best = [], {"val_loss": float("inf")}
+
+    for dropout in [0.3, 0.5]:
+        for kernels in [(2, 3, 4), (2, 3, 4, 5)]:
+            for sched in [False, True]:
+                print(f"\n--- CNN: dropout={dropout}, kernels={kernels}, scheduler={sched} ---")
+                torch.manual_seed(42)
+                model = CNNClassifier(vocab_size=len(vocab), dropout=dropout,
+                                      kernel_sizes=kernels).to(device)
+                settings = {"dropout": dropout, "kernels": str(kernels)}
+                run_one(model, 1e-3, epochs, settings, results, best,
+                        use_scheduler=sched)
+
+    return save_results(results, best, "cnn")
+
+
+def tune_lstm(epochs=10):
+    results, best = [], {"val_loss": float("inf")}
+
+    for dropout in [0.5, 0.6]:
+        for hidden in [64, 128]:
+            for wd in [0.0, 1e-4]:
+                print(f"\n--- LSTM: dropout={dropout}, hidden_dim={hidden}, weight_decay={wd} ---")
+                torch.manual_seed(42)
+                model = LSTMClassifier(vocab_size=len(vocab), dropout=dropout,
+                                       hidden_dim=hidden).to(device)
+                settings = {"dropout": dropout, "hidden_dim": hidden}
+                run_one(model, 1e-3, epochs, settings, results, best,
+                        weight_decay=wd)
+
+    return save_results(results, best, "lstm")
+
+
 
 # RQ1: Identify which LLM generated the response
 
 # CNN testing data
-cnn = CNNClassifier(vocab_size=len(vocab)).to(device)
-cnn_history = train_model(cnn, epochs=20, lr=1e-3)
+cnn, cnn_history = tune_cnn()
 plot_history(cnn_history, "CNN", "cnn_curves.png")
-
 test_loss, test_acc, preds, labels = evaluate(cnn, test_loader)
-print(f"\nCNN test accuracy: {test_acc:.3f}")
+print(f"CNN test accuracy: {test_acc:.3f}")
 print(f"CNN test macro-F1: {f1_score(labels, preds, average='macro'):.3f}")
 print(classification_report(labels, preds, target_names=le.classes_))
-print("Confusion matrix (rows = true, columns = predicted):")
 print(confusion_matrix(labels, preds))
 
 # LSTM testing data
-torch.manual_seed(42)
-lstm = LSTMClassifier(vocab_size=len(vocab)).to(device)
-lstm_history = train_model(lstm, epochs=4, lr=1e-3)
+lstm, lstm_history = tune_lstm()
 plot_history(lstm_history, "LSTM", "lstm_curves.png")
-
 test_loss, test_acc, preds, labels = evaluate(lstm, test_loader)
 print(f"\nLSTM test accuracy: {test_acc:.3f}")
 print(f"LSTM test macro-F1: {f1_score(labels, preds, average='macro'):.3f}")

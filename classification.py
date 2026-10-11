@@ -246,7 +246,12 @@ def evaluate(model, loader):
     return total_loss / total, correct / total, all_preds, all_labels
 
 # the actual training run, keeps the best model found
-def train_model(model, epochs=15, lr=1e-3, weight_decay=0.0, use_scheduler=False):
+def train_model(model, epochs=15, lr=1e-3, weight_decay=0.0, use_scheduler=False, tr_loader=None, va_loader=None):
+    if tr_loader is None:
+        tr_loader = train_loader          # addition for RQ2
+    if va_loader is None:
+        va_loader = val_loader
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = None
     if use_scheduler:

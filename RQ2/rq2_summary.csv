@@ -1,0 +1,9 @@
+,,test_acc,test_acc,macro_f1,macro_f1
+,,mean,std,mean,std
+condition,model,,,,
+both,CNN,0.793,0.028,0.792,0.027
+both,LSTM,0.574,0.045,0.575,0.047
+input,CNN,0.377,0.007,0.375,0.009
+input,LSTM,0.331,0.004,0.322,0.005
+output,CNN,0.821,0.013,0.819,0.012
+output,LSTM,0.658,0.03,0.659,0.03

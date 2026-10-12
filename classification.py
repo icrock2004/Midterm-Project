@@ -14,7 +14,6 @@ import copy
 import matplotlib.pyplot as plt
 
 
-
 PATH = "dataset.txt"
 
 def fix_surrogates(text):
